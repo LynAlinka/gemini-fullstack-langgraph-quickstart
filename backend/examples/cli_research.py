@@ -2,9 +2,7 @@ import argparse
 from langchain_core.messages import HumanMessage
 from agent.graph import graph
 
-
 def main() -> None:
-    """Run the research agent from the command line."""
     parser = argparse.ArgumentParser(description="Run the LangGraph research agent")
     parser.add_argument("question", help="Research question")
     parser.add_argument(
@@ -21,10 +19,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--reasoning-model",
-        default="gemini-2.5-pro-preview-05-06",
+        default="llama-3.3-70b-versatile",
         help="Model for the final answer",
     )
+    parser.add_argument(
+        "--dir", 
+        type=str, 
+        help="Directory to search in", 
+        default=None
+    )
     args = parser.parse_args()
+
+    config = {"configurable": {"search_dir": args.dir}}
 
     state = {
         "messages": [HumanMessage(content=args.question)],
@@ -33,11 +39,10 @@ def main() -> None:
         "reasoning_model": args.reasoning_model,
     }
 
-    result = graph.invoke(state)
+    result = graph.invoke(state, config=config)
     messages = result.get("messages", [])
     if messages:
         print(messages[-1].content)
-
 
 if __name__ == "__main__":
     main()

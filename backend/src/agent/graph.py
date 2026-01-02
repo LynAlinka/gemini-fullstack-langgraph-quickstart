@@ -2,7 +2,7 @@ import os
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Send
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
@@ -96,46 +96,47 @@ def continue_to_web_research(state: QueryGenerationState):
 
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
-
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+    """LangGraph node that performs local directory research instead of Google Search.
 
     Args:
-        state: Current graph state containing the search query and research loop count
-        config: Configuration for the runnable, including search API settings
+        state: Current graph state containing the search query
+        config: Configuration containing the 'search_dir' parameter
 
     Returns:
-        Dictionary with state update, including sources_gathered, research_loop_count, and web_research_results
+        Dictionary with state update, including sources_gathered and web_research_results
     """
-    # Configure
-    configurable = Configuration.from_runnable_config(config)
-    formatted_prompt = web_searcher_instructions.format(
-        current_date=get_current_date(),
-        research_topic=state["search_query"],
-    )
+    # Get the search directory from the config passed via cli_research.py
+    search_dir = config.get("configurable", {}).get("search_dir")
+    
+    if not search_dir:
+        return {"messages": [SystemMessage(content="Error: Directory for local search not specified.")]}
 
-    # Uses the google genai client as the langchain client doesn't return grounding metadata
-    response = genai_client.models.generate_content(
-        model=configurable.query_generator_model,
-        contents=formatted_prompt,
-        config={
-            "tools": [{"google_search": {}}],
-            "temperature": 0,
-        },
-    )
-    # resolve the urls to short urls for saving tokens and time
-    resolved_urls = resolve_urls(
-        response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
-    )
-    # Gets the citations and adds them to the generated text
-    citations = get_citations(response, resolved_urls)
-    modified_text = insert_citation_markers(response.text, citations)
-    sources_gathered = [item for citation in citations for item in citation["segments"]]
+    results = []
+    try:
+        # Recursively crawl the directory
+        for root, dirs, files in os.walk(search_dir):
+            for file in files:
+                # Target common text-based files
+                if file.endswith((".txt", ".md", ".py", ".json", ".csv")):
+                    path = os.path.join(root, file)
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            # Check if the generated search query exists in the file content
+                            query = state.get("search_query")
+                            if query and query.lower() in content.lower():
+                                results.append(f"Source: {path}\nContent snippet: {content[:500]}...\n")
+                    except Exception:
+                        continue
+    except Exception as e:
+        return {"messages": [SystemMessage(content=f"FileSystem Error: {str(e)}")]}
+
+    final_results = "\n".join(results) if results else "No relevant information found in the specified local directory."
 
     return {
-        "sources_gathered": sources_gathered,
+        "sources_gathered": [], # Local files don't need complex grounding metadata for this task
         "search_query": [state["search_query"]],
-        "web_research_result": [modified_text],
+        "web_research_result": [final_results],
     }
 
 
@@ -215,15 +216,14 @@ def evaluate_research(
 def finalize_answer(state: OverallState, config: RunnableConfig):
     """LangGraph node that finalizes the research summary.
 
-    Prepares the final output by deduplicating and formatting sources, then
-    combining them with the running summary to create a well-structured
-    research report with proper citations.
+    Prepares the final output by combining sources gathered with the running summary 
+    to create a well-structured research report.
 
     Args:
         state: Current graph state containing the running summary and sources gathered
 
     Returns:
-        Dictionary with state update, including running_summary key containing the formatted final summary with sources
+        Dictionary with state update, including running_summary key containing the formatted final summary
     """
     # Format the prompt
     current_date = get_current_date()
@@ -236,18 +236,8 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     # init Reasoning Model via Groq
     result = groq_llm.invoke(formatted_prompt)
 
-    # Replace the short urls with the original urls and add all used urls to the sources_gathered
-    unique_sources = []
-    for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
-            unique_sources.append(source)
-
     return {
         "messages": [AIMessage(content=result.content)],
-        "sources_gathered": unique_sources,
     }
 
 
