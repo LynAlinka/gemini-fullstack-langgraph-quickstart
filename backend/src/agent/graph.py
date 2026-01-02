@@ -57,33 +57,37 @@ def continue_to_web_research(state: QueryGenerationState):
     ]
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """Search for information within local markdown documentation."""
+    """Search for keywords within local markdown documentation."""
     search_dir = config.get("configurable", {}).get("search_dir")
     
     if not search_dir:
         return {"messages": [SystemMessage(content="Error: Search directory not provided.")]}
 
     results = []
-    query = state.get("search_query", "").lower()
+    # Split the query into keywords for flexible matching
+    query_keywords = state.get("search_query", "").lower().split()
 
     try:
         for root, _, files in os.walk(search_dir):
             for file in files:
-                # Focus on .md files as per documentation requirements
+                # Target .md files for documentation research
                 if file.endswith(".md"):
                     path = os.path.join(root, file)
                     try:
                         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
-                            if query in content.lower():
-                                # Increased limit to 2000 chars for better syntax comparison
+                            content_lower = content.lower()
+                            # Match if at least 2 keywords from the query exist in the file
+                            match_count = sum(1 for word in query_keywords if word in content_lower)
+                            if match_count >= 2: 
+                                # Using 2000 characters to capture enough code for comparison
                                 results.append(f"Source: {path}\nContent: {content[:2000]}\n")
                     except:
                         continue
     except Exception as e:
         return {"messages": [SystemMessage(content=f"FileSystem Error: {str(e)}")]}
 
-    final_content = "\n".join(results) if results else "No relevant documentation found."
+    final_content = "\n".join(results) if results else "No relevant information found."
 
     return {
         "sources_gathered": [], 
