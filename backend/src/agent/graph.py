@@ -49,14 +49,14 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     result = structured_llm.invoke(formatted_prompt)
     return {"search_query": result.query}
 
-def continue_to_web_research(state: QueryGenerationState):
+def continue_to_local_research(state: QueryGenerationState):
     """Route to parallel local search nodes."""
     return [
-        Send("web_research", {"search_query": q, "id": int(i)})
+        Send("local_research", {"search_query": q, "id": int(i)})
         for i, q in enumerate(state["search_query"])
     ]
 
-def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
+def local_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     """Search for keywords within local markdown documentation."""
     search_dir = config.get("configurable", {}).get("search_dir")
     
@@ -124,7 +124,7 @@ def evaluate_research(state: ReflectionState, config: RunnableConfig):
         return "finalize_answer"
     
     return [
-        Send("web_research", {
+        Send("local_research", {
             "search_query": q, 
             "id": state["number_of_ran_queries"] + i
         })
@@ -146,14 +146,14 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
 builder = StateGraph(OverallState, config_schema=Configuration)
 
 builder.add_node("generate_query", generate_query)
-builder.add_node("web_research", web_research)
+builder.add_node("local_research", local_research)
 builder.add_node("reflection", reflection)
 builder.add_node("finalize_answer", finalize_answer)
 
 builder.add_edge(START, "generate_query")
-builder.add_conditional_edges("generate_query", continue_to_web_research, ["web_research"])
-builder.add_edge("web_research", "reflection")
-builder.add_conditional_edges("reflection", evaluate_research, ["web_research", "finalize_answer"])
+builder.add_conditional_edges("generate_query", continue_to_local_research, ["local_research"])
+builder.add_edge("local_research", "reflection")
+builder.add_conditional_edges("reflection", evaluate_research, ["local_research", "finalize_answer"])
 builder.add_edge("finalize_answer", END)
 
 graph = builder.compile(name="pro-search-agent")
